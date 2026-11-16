@@ -197,7 +197,9 @@ type Client struct {
 	Name    string // desktop name from ServerInit
 	Server  PixelFormat
 
-	standardLayout atomic.Pointer[DesktopLayout] // RFB ExtendedDesktopSize, separate from Apple layout
+	dynamicResolution atomic.Bool
+	resizeRequested   image.Point                   // wmu
+	standardLayout    atomic.Pointer[DesktopLayout] // RFB ExtendedDesktopSize, separate from Apple layout
 
 	wmu         sync.Mutex
 	wbuf        [20]byte
@@ -792,6 +794,9 @@ func (c *Client) framebufferUpdate() error {
 			}
 		}
 		switch enc {
+		case dynamicResolutionEncoding:
+			c.dynamicResolution.Store(true)
+			continue
 		case vncfeedback.Encoding:
 			c.feedback.enabled = true
 			continue

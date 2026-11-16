@@ -238,11 +238,15 @@ func (p *rfbPeer) ardLayoutLocked() error {
 		p.state.ardLayoutRevision = p.state.revision
 	}
 	p.state.Unlock()
-	b := ardLayoutBody(d, p.server.AvailableScreens)
+	available := p.server.AvailableScreens
+	if p.server.DynamicResolution {
+		available = d.Screens
+	}
+	b := ardLayoutBody(d, available)
 	if !p.advertised[ardMediaEncoding] {
-		b = ardPixelLayoutBody(d, p.server.AvailableScreens)
+		b = ardPixelLayoutBody(d, available)
 		if scale > 0 && base.Size.X > 0 {
-			b = ardScaledLayoutBody(base, d, p.server.AvailableScreens, scale)
+			b = ardScaledLayoutBody(base, d, available, scale)
 		}
 	}
 	log.Printf("ARD layout: peer=%s current=%d points=%dx%d framebuffer=%dx%d media=%t", p.conn.RemoteAddr(), networkOrder.Uint32(b[10:]), networkOrder.Uint16(b[2:]), networkOrder.Uint16(b[4:]), d.Size.X, d.Size.Y, p.advertised[ardMediaEncoding])

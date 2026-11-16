@@ -158,6 +158,10 @@ func (p *rfbPeer) ardConfigureDisplay() error {
 	}
 	p.state.Unlock()
 	log.Printf("ARD display configuration: peer=%s requested=%v actual=%v (physical outputs unchanged)", p.conn.RemoteAddr(), requested, size)
+	return p.restartARDDesktop()
+}
+
+func (p *rfbPeer) restartARDDesktop() error {
 	// A new layout requires fresh SRTP negotiation, including new keys/ports.
 	if old := p.ard.media.Swap(nil); old != nil {
 		old.close()

@@ -77,8 +77,8 @@ func run(parent context.Context) bool {
 	inputTransform := flags.Uint("input-transform", 0, "captured image rotation/flip (Wayland 0..7)")
 	flags.Parse(os.Args[1:])
 	if *dynamicResolution {
-		if *output == "" || *output == "auto" || *multiple || *test || *ard {
-			log.Fatal("dynamic-resolution requires one named output and standard VNC (no ard)")
+		if *output == "" || *output == "auto" || *multiple || *test {
+			log.Fatal("dynamic-resolution requires one named output (no auto, Portal or test source)")
 		}
 		*allowResize, *resizeOutputMode, *maxClients = true, true, 1
 	}

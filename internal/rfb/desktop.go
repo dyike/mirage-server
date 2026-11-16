@@ -5,6 +5,9 @@ import (
 	"io"
 )
 
+// dynamicResolutionEncoding is Mirage's dedicated-desktop capability.
+const dynamicResolutionEncoding int32 = -13054
+
 // DesktopScreen is a standard RFB screen in framebuffer coordinates.
 // IDs and flags are opaque; neither implies Apple's display selection support.
 type DesktopScreen struct {
@@ -14,8 +17,9 @@ type DesktopScreen struct {
 }
 
 type DesktopLayout struct {
-	Size    image.Point
-	Screens []DesktopScreen
+	DynamicResolution bool
+	Size              image.Point
+	Screens           []DesktopScreen
 }
 
 // Desktop returns a snapshot of the last accepted ExtendedDesktopSize layout.
@@ -26,6 +30,7 @@ func (c *Client) Desktop() *DesktopLayout {
 		return nil
 	}
 	copy := *l
+	copy.DynamicResolution = c.dynamicResolution.Load()
 	copy.Screens = append([]DesktopScreen(nil), l.Screens...)
 	return &copy
 }
@@ -54,5 +59,35 @@ func (c *Client) readExtendedDesktopSize(r image.Rectangle) error {
 		c.cfg.OnDesktop(*c.Desktop())
 	}
 	c.trace("RFB desktop version=%s name=%q size=%v screens=%+v", c.Version, c.Name, l.Size, l.Screens)
+	return nil
+}
+
+// Resize follows the viewer only when the server explicitly offers a dedicated desktop.
+func (c *Client) Resize(w, h int, _ uint32) error {
+	if !c.dynamicResolution.Load() || w < 200 || h < 200 || w > 8192 || h > 8192 {
+		return nil
+	}
+	w, h = w&^1, h&^1
+	l := c.Desktop()
+	if l == nil || len(l.Screens) != 1 || l.Size == image.Pt(w, h) {
+		return nil
+	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if c.inputBlocked() || c.resizeRequested == image.Pt(w, h) {
+		return nil
+	}
+	b := make([]byte, 24)
+	b[0], b[6] = 251, 1
+	be.PutUint16(b[2:], uint16(w))
+	be.PutUint16(b[4:], uint16(h))
+	be.PutUint32(b[8:], l.Screens[0].ID)
+	be.PutUint16(b[16:], uint16(w))
+	be.PutUint16(b[18:], uint16(h))
+	be.PutUint32(b[20:], l.Screens[0].Flags)
+	if err := c.send(b); err != nil {
+		return err
+	}
+	c.resizeRequested = image.Pt(w, h)
 	return nil
 }

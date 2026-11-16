@@ -124,9 +124,19 @@ func (p *rfbPeer) resize() error {
 	}
 	p.state.Lock()
 	p.state.desktop = d
+	if p.server.DynamicResolution && p.ard != nil {
+		p.state.ardScaleBase = d.clone()
+		p.state.ardScale = 0
+	}
 	p.state.invalidateCaptureLocked()
 	p.state.layoutPending = true
 	p.state.Unlock()
+	if p.server.DynamicResolution && p.ard != nil {
+		if err := p.send(updateMessage(desktopRectangle(d, 1, 0))); err != nil {
+			return err
+		}
+		return p.restartARDDesktop()
+	}
 	select {
 	case p.requests <- struct{}{}:
 	default:

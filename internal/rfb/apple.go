@@ -67,7 +67,7 @@ const (
 
 // appleMeta are the pseudo-encodings requested in the Apple dialect.
 var appleMeta = []int32{
-	displaymeta.Encoding, dynamicResolutionEncoding, EncPseudoExtendedDesktopSize,
+	displaymeta.Encoding,
 	EncAppleCursorImage, EncAppleCursorPosition, EncPseudoDesktopSize, EncAppleDisplayInfo, EncAppleDisplayLayout,
 }
 

@@ -62,6 +62,7 @@ func run(parent context.Context) bool {
 	cursorMode := flags.String("cursor-mode", "auto", "auto, local or embedded cursor")
 	multiple := flags.Bool("multiple", false, "select multiple screens in the desktop portal")
 	resizeOutputMode := flags.Bool("resize-output-mode", false, "apply client desktop resize to compositor output modes (requires allow-resize)")
+	dynamicResolution := flags.Bool("dynamic-resolution", false, "dedicated single-output desktop follows Mirage VNC client window size")
 	allowResize := flags.Bool("allow-resize", false, "allow RFB clients to resize/rearrange the captured framebuffer")
 	inputOutput := flags.String("input-output", "", "captured Wayland output name; empty disables remote input")
 	maxClients := flags.Int("max-clients", 4, "maximum authenticated clients")
@@ -75,6 +76,12 @@ func run(parent context.Context) bool {
 	keyboardVariant := flags.String("keyboard-variant", "", "XKB keyboard variant(s)")
 	inputTransform := flags.Uint("input-transform", 0, "captured image rotation/flip (Wayland 0..7)")
 	flags.Parse(os.Args[1:])
+	if *dynamicResolution {
+		if *output == "" || *output == "auto" || *multiple || *test || *ard {
+			log.Fatal("dynamic-resolution requires one named output and standard VNC (no ard)")
+		}
+		*allowResize, *resizeOutputMode, *maxClients = true, true, 1
+	}
 	if *enroll {
 		if *srpPath == "" {
 			*srpPath = defaultSRPPath()
@@ -290,6 +297,7 @@ func run(parent context.Context) bool {
 		}
 		srv.MaxClients = *maxClients
 		srv.RefreshInputOnResize = *resizeOutputMode
+		srv.DynamicResolution = *dynamicResolution
 		srv.Screens = screens
 		if len(nativeNames) > 0 {
 			srv.DisplayNames = make(map[uint32]string)
@@ -359,6 +367,30 @@ func run(parent context.Context) bool {
 						return fmt.Errorf("output-mode resize requires named outputs")
 					}
 					changes = append(changes, input.OutputMode{Name: names[screen.ID-1], Width: screen.Bounds.Dx(), Height: screen.Bounds.Dy(), X: screen.Bounds.Min.X, Y: screen.Bounds.Min.Y})
+				}
+				if *dynamicResolution {
+					outputs, err := input.DiscoverOutputs()
+					if err != nil {
+						return err
+					}
+					for i := range changes {
+						found := false
+						for _, output := range outputs {
+							if output.Name == changes[i].Name {
+								changes[i].X, changes[i].Y = output.Bounds.Min.X, output.Bounds.Min.Y
+								found = true
+							}
+						}
+						if !found {
+							return fmt.Errorf("dynamic output disappeared")
+						}
+					}
+				}
+				if *dynamicResolution {
+					if len(changes) != 1 {
+						return fmt.Errorf("dynamic resolution requires a single output")
+					}
+					return configureDynamicOutput(ctx, changes[0])
 				}
 				return input.ConfigureOutputs(ctx, changes)
 			}

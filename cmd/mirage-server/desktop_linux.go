@@ -1,8 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"github.com/dyike/mirage-server/internal/server/input"
 	"image"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
 
 	"github.com/dyike/mirage-server/internal/server"
 	"github.com/dyike/mirage-server/internal/server/portal"
@@ -41,4 +47,25 @@ func portalLayout(streams []portal.Stream, width, height int) ([]server.DesktopS
 		result[i] = server.DesktopScreen{ID: uint32(i + 1), Bounds: image.Rect(r.Min.X*width/union.Dx(), r.Min.Y*height/union.Dy(), r.Max.X*width/union.Dx(), r.Max.Y*height/union.Dy())}
 	}
 	return result, nil
+}
+
+// Hyprland reapplies monitor rules after output-management transactions. Update
+// the runtime rule too, otherwise a successful resize can immediately revert.
+func configureDynamicOutput(ctx context.Context, change input.OutputMode) error {
+	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") == "" {
+		return input.ConfigureOutputs(ctx, []input.OutputMode{change})
+	}
+	// Output names are compositor-provided but must still be safe Lua literals.
+	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(change.Name) {
+		return fmt.Errorf("unsupported dynamic output name %q", change.Name)
+	}
+	code := fmt.Sprintf(`hl.monitor({output=%q,mode="%dx%d@60",position="%dx%d",scale=1})`, change.Name, change.Width, change.Height, change.X, change.Y)
+	result, err := exec.CommandContext(ctx, "hyprctl", "eval", code).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("configure virtual output: %w: %s", err, result)
+	}
+	if strings.TrimSpace(string(result)) != "ok" {
+		return fmt.Errorf("configure virtual output: %s", result)
+	}
+	return nil
 }

@@ -48,7 +48,6 @@ type RFBServer struct {
 	VideoBitrate, VideoFPS int
 	MaxClients             int
 	RefreshInputOnResize   bool
-	DynamicResolution      bool
 	OpenInput              func() (InputSession, error)
 	OpenClipboard          func() (Clipboard, error)
 	OpenCursor             func() (Cursor, error)

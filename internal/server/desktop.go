@@ -7,9 +7,6 @@ import (
 	"slices"
 )
 
-// dynamicResolutionEncoding advertises a dedicated desktop that follows the viewer.
-const dynamicResolutionEncoding int32 = -13054
-
 type DesktopScreen struct {
 	ID     uint32
 	Bounds image.Rectangle

@@ -111,12 +111,8 @@ func (p *rfbPeer) announce(offers map[uint32]bool) error {
 		}
 	}
 
-	for _, code := range []int32{dynamicResolutionEncoding, -258, -259, -261, -316, -308, -239, vncfeedback.Encoding} {
+	for _, code := range []int32{-258, -259, -261, -316, -308, -239, vncfeedback.Encoding} {
 		v := uint32(code)
-		// Mirage dedicated desktop capability; never change an ordinary shared desktop.
-		if code == dynamicResolutionEncoding && (!p.server.DynamicResolution || p.ard != nil || p.server.SetDesktop == nil) {
-			continue
-		}
 		// ARD already uses authenticated RTCP feedback. Older Mac clients
 		// send the ordinary VNC feedback without the Apple record write lock.
 		// Do not negotiate this unrelated extension on an ARD connection.

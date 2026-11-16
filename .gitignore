@@ -1,0 +1,20 @@
+dist/
+bin/
+*.keystore
+*.jks
+*.p12
+*.apks
+__pycache__/
+internal/systemclipboard/clipboard_android.jar
+internal/mobilebackground/background_android.jar
+internal/terminalemoji/emoji_android.jar
+internal/ssh/agentassets/*.gz
+internal/ssh/agentassets/*.stamp
+
+# Local Go workspace; dependencies must not be vendored.
+/vendor/
+/go.work
+/go.work.sum
+
+# Local assistant memory; not part of the project.
+/.modu_code/

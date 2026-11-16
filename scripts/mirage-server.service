@@ -1,0 +1,16 @@
+[Unit]
+Description=Mirage Go VNC server (port 5902)
+After=graphical-session.target pipewire.service
+PartOf=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/mirage-server -listen 0.0.0.0:5902 -ard -ard-udp-port 5902 -pam-service system-auth -cert %h/.config/mirage-server/tls_cert.pem -key %h/.config/mirage-server/tls_key.pem -output auto -width 3840 -height 2160 -fps 30 -bitrate 8000 -codec hevc
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

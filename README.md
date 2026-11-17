@@ -1,46 +1,68 @@
 # Mirage Server
 
-从 `mirage` 提交 `8ed35bd` 拆分。客户端位于同级 `mirage` 仓库。
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-内部协议和媒体包为 Mirage 自有源码的独立快照，包含客户端互操作测试所需实现；后续修改需按需同步两端。
+A Go remote desktop server for Linux/Wayland, with VNC compatibility and Mirage's Apple Remote Desktop (ARD) media path for hardware-encoded HEVC/H.264 over SRTP.
 
-### ARD 高性能模式（复用现有 Mac 客户端）
+Extracted from the `mirage` repository at commit `8ed35bd`. The client lives in the sibling [`mirage`](https://github.com/dyike/mirage) repository.
 
-Go 服务端增加 `-ard -ard-udp-port 5902` 后，同时接受 Apple `RFB 003.889` 和标准 `RFB 003.008`。现有 Mirage 客户端无需更新代码：新建 **Mac** 类型连接，选择 **自动画质**，填写系统账户、密码和 `5902` 端口，即复用现有 HEVC/H.264 SRTP 接收与硬件解码路径。原有 **VNC** 类型连接继续使用 VeNCrypt/TCP。
+The internal protocol and media packages are independent snapshots of Mirage's own source, including the client implementations used by interoperability tests. Synchronize changes between the repositories when needed. Dependencies are managed through Go Modules; do not create a `vendor/` directory.
 
-- ARD 路径使用现有客户端支持的 security type 30、Apple 加密记录层、MediaStream 协商，以及 AES-256 SRTP/SRTCP。账户可由 `-pam-service` 验证；固定账户使用 `-username` 和 `-password-file`。ARD 的用户名和密码字段各最多 63 字节。标准 VNC 的 TLS 证书校验保持原样；不要把带有 VNC 证书指纹的旧配置直接改成 Mac 配置来绕过校验。
-- 首个媒体会话使用 `5902/UDP`，后续并发会话依次使用后面的端口（默认最多四个，即 `5902–5905/UDP`）。UDP 端口在媒体协商时绑定；`-ard-udp-port 0` 使用临时端口，适合测试。外网需要相应的 UDP 放行及同端口转发，仅转发 TCP 不够。
-- 控制、键鼠和文本剪贴板保留可靠传输；视频独立通过 SRTP。服务端根据认证后的 RTCP 丢包与排队反馈降低码率，按关键帧请求让现有编码器原地生成关键帧（不重建采集管线）。发送队列受限，完整帧不会因正常限速等待而被截断重启；单包丢失不直接触发码率骤降。原生 DMA-BUF 采集在画面静止时复用 GPU 帧保持媒体输出，避免客户端误判断流，不映射 CPU 像素。客户端在原端口重新协商低码率时，服务端接受新 SRTP 密钥并继续视频，不再拒绝重新协商。UDP 不通时，现有客户端在首帧等待超时后回退 TCP 画面。
-- 已验证现有 Mirage Mac 客户端的 H.264/HEVC 硬件解码、DMA-BUF 零拷贝、丢包恢复及 UDP 黑洞回退。此实现针对 Mirage 已有的 ARD 子集，未宣称兼容 Apple 原生 Screen Sharing.app 的全部功能。
-- ARD 通道支持系统输出音频：服务端通过 PipeWire 捕获默认输出监视器（不采集麦克风），使用系统 `libfdk-aac.so.2` 编码为 48 kHz 双声道 AAC-ELD，独立 SRTP 音频通道为 128 kbit/s。缺少编码库时仅关闭 ARD 音频并记录原因；`-no-audio` 可禁用。音频端口紧随视频端口池，默认四个会话为 `5906–5909/UDP`，VPN/防火墙也需允许这些端口。视频降码率重新协商时音频同步换密钥并重启。现有 Mirage 客户端无需更新，标准 VNC 原有音频不受影响。画面使用服务端配置的输出；码率自适应及重新协商始终保持输出分辨率，不因低码率或大帧自动缩小画面。大帧按协商码率完整发送，低带宽下可能增加延迟。输入坐标仍对应原生桌面。客户端手动缩放及多屏切换尚未实现。
+## ARD high-performance mode
 
-硬件端到端验证（需要本机 VA-API、GStreamer 和 EGL）：
+Enable `-ard -ard-udp-port 5902` to accept both Apple `RFB 003.889` and standard `RFB 003.008`. In an existing Mirage client, create a **Mac** connection, select **Auto** quality, and enter the account credentials and port `5902`. This uses the client's existing HEVC/H.264 SRTP receiver and hardware decoder. **VNC** connections continue to use VeNCrypt/TCP.
+
+- The ARD path supports security type 30, Apple's encrypted record layer, MediaStream negotiation, and AES-256 SRTP/SRTCP. Use `-pam-service` for account authentication, or `-username` and `-password-file` for a fixed account. ARD username and password fields are each limited to 63 bytes. Standard VNC TLS certificate validation remains unchanged: do not convert an existing VNC profile with a saved certificate fingerprint to a Mac profile to bypass validation.
+- The first media session uses `5902/UDP`. Subsequent sessions use consecutive ports, normally `5902–5905/UDP` for the default limit of four clients. Ports are bound during media negotiation. Use `-ard-udp-port 0` for ephemeral ports in tests. Remote access requires the corresponding UDP firewall rules and same-port forwarding; forwarding TCP alone is insufficient.
+- Control messages, keyboard/mouse input, and text clipboard data retain reliable transport. Video travels separately over SRTP. Authenticated RTCP loss and queue feedback drive bitrate reduction. Keyframe requests trigger the current encoder without rebuilding capture. A bounded send queue sends complete frames without truncating them under normal rate limiting; a single lost packet does not immediately cause a large bitrate drop. Native DMA-BUF capture reuses GPU frames while the desktop is idle to keep media flowing, without mapping CPU pixels. Bitrate renegotiation on the same port accepts new SRTP keys and continues video. If UDP is unreachable, the existing client falls back to TCP pictures after its first-frame timeout.
+- Tests have verified H.264/HEVC hardware decoding, zero-copy DMA-BUF operation, packet-loss recovery, and UDP-blackhole fallback with Mirage's Mac client. This implements the ARD subset used by Mirage, not every feature of Apple's native Screen Sharing.app.
+- ARD system audio captures the default output monitor through PipeWire, not the microphone. The system `libfdk-aac.so.2` encodes 48 kHz stereo AAC-ELD at 128 kbit/s over a separate SRTP audio channel. If the library is missing, only ARD audio is disabled and the reason is logged. Use `-no-audio` to disable audio explicitly. Audio ports follow the video pool: `5906–5909/UDP` for four clients. Allow these through the VPN/firewall as well. Audio receives new keys and restarts when video renegotiates its bitrate. Existing Mirage clients need no update for this audio path; standard VNC audio is unaffected.
+- Adaptive bitrate and renegotiation preserve the configured output resolution. Low bitrate or large frames do not automatically shrink the desktop. Large frames are sent completely at the negotiated rate, which can increase latency on slow links. Input coordinates continue to map to the native desktop. See [Display capture and selection](#display-capture-and-selection) for output switching in updated clients.
+
+Hardware end-to-end checks require local VA-API, GStreamer, and EGL:
 
 ```bash
 MIRAGE_TEST_RFB_GPU=1 go test -race -tags purego ./internal/server -run '^TestARDHardwareInterop$' -v
-# 真实 4K 输出，模拟每 200 个视频包丢 1 个；仅输出计数与时序，不记录画面
+# Capture a real 4K output and drop one in every 200 video packets.
+# Only counters and timings are logged; desktop images are not recorded.
 MIRAGE_TEST_ARD_SOAK=1 MIRAGE_TEST_NATIVE_OUTPUT=MIRAGE MIRAGE_TEST_DROP_EVERY=200 go test -race -tags purego ./internal/server -run '^TestARDLocalSoak$' -v
 ```
 
-### HEVC 扩展
+## Remote-only audio
 
-Go 服务端支持私有编码 `0x4d485643`（MHVC），只有客户端主动声明才会使用，普通 VNC 客户端仍协商已有编码。当前实现为 VA-API HEVC Main 8-bit，禁用 B 帧；不是标准 RFB HEVC 扩展。
+`-audio-exclusive` temporarily routes PipeWire/PulseAudio playback streams to a silent virtual sink while remote audio is active. Mirage captures that sink explicitly, so the physical speakers do not play the redirected streams. For ARD, routing starts only after authenticated audio receiver feedback. Video-only connections do not take over sound.
 
-客户端运行 `MIRAGE_VNC_HEVC=1 go run -tags purego ./cmd/mirage`，选择 VNC 和自动画质，连接服务端地址的 `5902` 端口。HEVC 目前是实验开关，默认不启用。
+The original default output and each existing stream's destination are recorded. New playback streams are routed while exclusive audio is active. The last audio stream releasing its lease restores local playback after a one-second grace period; brief SRTP renegotiations share the same lease state. Loss of authenticated ARD audio feedback for more than three seconds stops capture and releases the lease. Reconnect if the audio transport has timed out.
 
-### Go 服务端开发入口
+This optional mode requires `pactl` and PipeWire's PulseAudio compatibility server. It changes routing, not physical-device volume or mute settings. It affects the current user's desktop audio, not only the application visible remotely; direct ALSA applications that bypass PipeWire/PulseAudio are outside its scope. More than one receiver can share audio, but only one exclusive-audio server process may manage routing per user.
 
-服务端在本仓库独立开发，使用 Go Modules 管理依赖。入口为 `cmd/mirage-server`，代码位于 `internal/server/`。Linux 支持按输出名称直接使用 Wayland ext-image-copy-capture 采集，也可通过桌面 Portal 获取 PipeWire 流；使用 purego 调用 GStreamer/VA-API 编码 HEVC/H.264，不启动 WayVNC/NeatVNC 子进程。
+Recovery state is stored privately under `$XDG_RUNTIME_DIR/mirage-audio/`. Normal shutdown restores audio; the next exclusive-audio startup recovers stale state. For systemd crash recovery, add the following to the service's `[Service]` section as well as enabling `-audio-exclusive` on `ExecStart`:
 
-捕获验证（弹出系统屏幕选择框，编码数据仅计数，不保存或发送）：
+```ini
+ExecStopPost=%h/.local/bin/mirage-server -restore-audio
+```
+
+`mirage-server -restore-audio` can also be run manually after the exclusive-audio process exits. Recovery preserves an explicitly changed default or streams already moved away from the virtual sink. If the previous device is unavailable, it chooses another available output; if none exists, it retains recovery state rather than discarding it.
+
+## Mirage HEVC extension
+
+The server supports private encoding `0x4d485643` (MHVC), used only when the client explicitly advertises it. Ordinary VNC clients negotiate their existing encodings. The implementation uses VA-API HEVC Main, 8-bit, with B-frames disabled. This is not a standard RFB HEVC extension.
+
+From the client repository, run `MIRAGE_VNC_HEVC=1 go run -tags purego ./cmd/mirage`, choose VNC and Auto quality, and connect to port `5902`. This documents the experimental opt-in used by the original client; check the client version's defaults when deploying.
+
+## Development and quick start
+
+The entry point is `cmd/mirage-server`; server code lives in `internal/server/`. On Linux, capture can use Wayland ext-image-copy-capture directly by output name, or obtain PipeWire streams through the desktop portal. GStreamer/VA-API is called through purego to encode HEVC/H.264. The server does not launch WayVNC or NeatVNC subprocesses.
+
+Runtime requirements include PipeWire and GStreamer plugins for VA encoding, codec parsing, and appsink. Capture verification opens the system screen picker and counts encoded data without saving or transmitting it:
 
 ```sh
 go run ./cmd/mirage-server -codec hevc -probe-frames 60
 ```
 
-添加 `-test-source` 使用合成画面。原生库运行时需要 PipeWire、GStreamer VA、编码解析器与 appsink 插件。
+Add `-test-source` to use a synthetic image instead of the desktop.
 
-加密 VNC 服务端（现有 Mirage 客户端选择 VNC 即可，不需要新协议）：
+To start an encrypted VNC server:
 
 ```sh
 go run --tags purego ./cmd/mirage-server -listen 127.0.0.1:5910 \
@@ -48,82 +70,122 @@ go run --tags purego ./cmd/mirage-server -listen 127.0.0.1:5910 \
   -input-output MIRAGE -keyboard-layout us
 ```
 
-`password.txt` 保存 1–8 字节 VNC 密码（末尾换行会去除）；VNC challenge/response 在 VeNCrypt X509Vnc 的 TLS 内传输。若指定 `-username`，则改用 TLS 内的 X509Plain 账户认证，支持最多 256 字节密码；客户端填写相同用户名即可。客户端沿用已有证书验证/确认流程。服务端使用 RFB 3.8，参考 [RFC 6143](https://www.rfc-editor.org/rfc/rfc6143.html)，不使用之前实验的 `MIRAGE/2` 协议。
+`password.txt` contains a 1–8 byte VNC password; trailing line endings are removed. VNC challenge/response runs inside VeNCrypt X509Vnc TLS. Specifying `-username` selects X509Plain account authentication inside TLS, supporting passwords up to 256 bytes; the client must supply the same username. Existing client certificate verification and confirmation flows still apply. The server uses RFB 3.8, as described in [RFC 6143](https://www.rfc-editor.org/rfc/rfc6143.html), rather than the earlier experimental `MIRAGE/2` protocol.
 
-编码由现有客户端协商：H.264、已启用的 Mirage HEVC 扩展、ZRLE、Tight、Raw 均可使用。清晰模式优先 ZRLE；Tight/ZRLE 使用连接内持续的 zlib 流。Raw 支持 8/16/32 位 true-color 像素格式和大小端。视频切换、尺寸变化或码率调整会重启编码器，从独立画面开始。连接从最高 2 Mbit/s 起步，默认上限 8 Mbit/s、30 FPS。视频编码使用 VBR、小 CPB；驱动在复杂画面上仍可能超过目标，因此发送端还按实际编码字节限速，允许最多 50 ms 突发，不丢弃有参考依赖的编码帧。TCP 发送队列和真实写入阻塞用于快速降码率，稳定后缓慢恢复，最大视频码率由 `-bitrate` 限制。编码前的有界队列丢弃过时原始帧；音频和协议开销不包含在视频码率限制内，48 kHz 双声道 S16 音频约占 1.536 Mbit/s。
+Clients negotiate H.264, the enabled Mirage HEVC extension, ZRLE, Tight, or Raw. Clear quality prefers ZRLE. Tight/ZRLE maintain a persistent zlib stream within each connection. Raw supports 8/16/32-bit true-color formats in either byte order. Video format changes, size changes, or bitrate adjustments restart the applicable encoder path from an independent picture.
 
-功能与连接方式：
+Connections start at up to 2 Mbit/s, with defaults of 8 Mbit/s maximum and 30 FPS. Video uses VBR and a small CPB. Drivers may still exceed the target on complex images, so the sender also limits actual encoded bytes, permits at most 50 ms of burst traffic, and does not discard interdependent encoded frames. TCP queue depth and actual write blocking trigger quick bitrate reduction followed by gradual recovery. `-bitrate` sets the maximum video bitrate. A bounded queue before encoding drops stale raw frames. Audio and protocol overhead are outside the video budget; 48 kHz stereo S16 audio alone is approximately 1.536 Mbit/s.
 
-| 功能 | Go 服务端实现 |
+## Features
+
+| Feature | Implementation |
 | --- | --- |
-| 认证 | RFB 3.8、VeNCrypt TLS、VNC 密码或账户密码；验证后才创建桌面控制设备 |
-| 键鼠 | XKB 布局、组合键、物理键码、按键去重、LED、五键鼠标、四向滚轮、断线释放 |
-| 输入扩展 | QEMU Extended Key Event、QEMU LED State、Extended Mouse Buttons；只在协商后启用 |
-| 剪贴板 | Wayland data-control 双向文本；经典 Latin-1 和扩展 UTF-8 文本协议；长度与解压上限 |
-| 音频 | PipeWire 输出音频，QEMU Audio 协商、启停、格式切换；默认 48 kHz 双声道 S16LE；不采集麦克风 |
-| 光标 | 原生 Wayland cursor capture、本地 Cursor 形状与热点、随编码尺寸缩放；不支持时选择嵌入画面 |
-| 多屏 | Portal 多流、VA-API 合成、ExtendedDesktopSize 布局、按 screen ID 路由输入、同一指针跨屏拖动 |
-| 尺寸调整 | 可选连接内缩放/重排；可选原子 wlr-output-management 模式配置，拒绝时返回失败状态 |
-| 传输 | 连续更新、Fence 回复、统一消息写锁、有限缓冲、慢连接超时、共享/独占连接语义 |
+| Authentication | RFB 3.8, VeNCrypt TLS, VNC password or account credentials; desktop control devices are created only after authentication |
+| Keyboard and mouse | XKB layouts, chords, physical keycodes, key deduplication, LEDs, five mouse buttons, four-way scrolling, and input release on disconnect |
+| Input extensions | QEMU Extended Key Event, QEMU LED State, and Extended Mouse Buttons, enabled only after negotiation |
+| Clipboard | Bidirectional Wayland data-control text; classic Latin-1 and extended UTF-8 protocols, with size and decompression limits |
+| Audio | PipeWire output audio; QEMU Audio negotiation, start/stop, and format changes; 48 kHz stereo S16LE by default; no microphone capture |
+| Cursor | Native Wayland cursor capture, local cursor image and hotspot, scaling with encoded dimensions, and embedded-cursor fallback |
+| Multiple displays | Portal multi-stream capture, VA-API composition, ExtendedDesktopSize layouts, input routing by screen ID, and cross-display dragging with one pointer |
+| Resizing | Optional per-connection scaling/rearrangement and atomic wlr-output-management mode configuration, with failure status when rejected |
+| Transport | Continuous updates, Fence replies, a shared message write lock, bounded buffering, slow-connection timeouts, and shared/exclusive connection semantics |
 
-所有服务端代码位于本项目，依赖继续通过根 `go.mod` 管理。输入、剪贴板和光标由 Go 直接处理 Wayland 消息和 FD；系统 libxkbcommon、PipeWire、GStreamer/VA-API 通过现有 purego 依赖调用，不启动 C 服务端子进程。
+Go handles Wayland messages and file descriptors directly for input, clipboard, and cursor support. System libxkbcommon, PipeWire, and GStreamer/VA-API are called through purego; no C server subprocess is launched. Dependencies remain in the root `go.mod` and `go.sum`.
 
-`-output MIRAGE` 按 Wayland 输出名称直接采集整屏，无需 Portal、选择框或恢复令牌，同时将键鼠绑定到同一输出；不存在的输出直接报错。此路径要求 compositor 支持 `ext-image-copy-capture-v1`、`ext-output-image-capture-source-v1`，当前只接受单屏。H.264/HEVC 使用 GBM 分配的 DMA-BUF，经 `zwp_linux_dmabuf_v1` 交给 compositor 写入，再由 GStreamer/VA-API 导入；不经 CPU 映射或像素复制。六帧有界池在编码器释放最后一个内存引用后复用缓冲区，缩放和颜色转换在 GPU 上完成。编码路径禁止 CPU 映射，不支持 DMA 导入时明确报错，不自动降级。当前支持同一 DRM 设备的线性 XRGB/ARGB、未旋转输出；其他修饰符或旋转输出会报错。Raw/Tight/ZRLE 像素编码仍使用 `wl_shm` 的 CPU 路径。
+## Display capture and selection
 
-`-output auto` 在启动时自动发现 Wayland 命名输出（最多 16 个），按名称排序，默认采集第一个。配合 `-ard`，Mirage 客户端已有的 Remote Displays 面板可以切换屏幕：每个连接独立选择，画面和鼠标映射使用相同的屏幕 ID，不修改物理屏模式。服务模板默认启用此模式；仍可通过 `-output DP-1` 或 `-output MIRAGE` 固定共享目标。
+### Named output
 
-当前自动模式采用嵌入光标，编码尺寸由 `-width/-height` 决定；更新后的客户端显示实际输出名称，并标记默认屏幕；All Displays 按实际逻辑位置拼接全部屏幕，并在编码尺寸上限内保持桌面比例。多屏 H.264/HEVC 使用 DMA-BUF 采集、OpenGL 缩放合成，再在 GPU 内部 blit 到线性 GBM 缓冲交给 VA 编码；全程不进行 CPU 像素映射、回读或上传。采集池和合成目标池按下游释放引用后复用。GPU/EGL 不支持时明确报错，不静默降级为 CPU 合成；Raw 编码仍使用 CPU 路径。名称和单屏限制通过客户端主动请求的 Mirage 布局扩展传输，旧客户端仍显示屏幕编号。自动模式每 500ms 检查输出位置、逻辑尺寸和像素尺寸，连续两次一致后自动重建布局、采集与输入映射；缩放、分辨率变化或插拔屏幕会使现有客户端短暂断开并重连，无需手动重启服务。停用或没有有效逻辑尺寸的输出不进入可选列表；所有屏幕不可用时服务等待输出恢复。此功能尚不提供屏幕类型识别。自动发现会使所有发现的输出对已认证客户端可选。
+`-output MIRAGE` captures the entire named Wayland output directly, without a portal, picker, or restore token, and binds input to that output. A missing output is an error. This path requires `ext-image-copy-capture-v1` and `ext-output-image-capture-source-v1` support from the compositor. An explicit output name selects one screen.
 
-不传 `-output` 时仍使用 Portal。`-input-output` 必须与 Portal 中所选屏幕对应，省略时不开放键鼠。多屏使用 `-multiple`，并按 Portal 流的顺序填写逗号分隔的输出名称，例如 `-input-output DP-1,HDMI-A-1`；Portal 后端必须支持多选。多屏坐标使用 XDG logical geometry，处理不同桌面缩放；键鼠共用一个虚拟设备，跨屏不重新按下鼠标键。
+H.264/HEVC uses GBM-allocated DMA-BUFs submitted to the compositor through `zwp_linux_dmabuf_v1` and imported by GStreamer/VA-API. There is no CPU mapping or pixel copy. A bounded six-frame pool reuses buffers after the encoder releases its final memory reference. Scaling and color conversion happen on the GPU. CPU mapping is prohibited in this path, and unsupported DMA imports fail explicitly rather than falling back. Current support is for linear XRGB/ARGB on the same DRM device and unrotated outputs; other modifiers or rotated outputs are rejected. Raw/Tight/ZRLE still use the CPU `wl_shm` path.
 
-`-input-seat` 选择 seat；`-keyboard-rules/model/layout/variant/options` 配置 XKB；`-input-transform` 指定捕获图像的 Wayland 变换（0..7）。`-no-clipboard` 和 `-no-audio` 可分别关闭剪贴板和桌面音频。`-max-clients` 默认 4，每个连接独立维护认证、编码、输入和音频状态。
+### Automatic discovery
 
-`-cursor-mode auto` 在提供输出名称且 compositor 支持 cursor capture 时选择本地光标，否则嵌入画面；也可显式选择 `local` 或 `embedded`。本地模式面向支持标准 Cursor 编码的客户端，现有 Mirage 已支持。
+`-output auto` discovers up to 16 named outputs at startup, sorts them by name, and captures the first by default. With `-ard`, Mirage's Remote Displays panel can switch outputs independently for each connection. Video and mouse mapping use the same screen ID without changing physical display modes. The service template uses this mode. Use `-output DP-1` or `-output MIRAGE` to pin a specific screen instead.
 
-`-allow-resize` 允许客户端通过标准 SetDesktopSize 请求调整编码尺寸、选择已授权的屏幕或重排布局，不改物理显示模式。额外开启 `-resize-output-mode` 才会向 compositor 提交物理输出模式和位置修改；其他输出保持原状。物理配置是否成功由 compositor 决定，代码已验证成功/拒绝的协议路径，未在本机修改真实显示模式。
+Automatic mode currently embeds the cursor and uses `-width/-height` as the encoding dimensions. Updated clients show output names and mark the default display. All Displays composes screens at their logical positions while preserving the aggregate desktop aspect ratio within the encoding limits.
 
-客户端保持兼容，但服务端不能增加旧客户端尚未发出的协议请求：当前 Mirage VNC 剪贴板发送的是经典 Latin-1，切屏/服务端缩放按钮仅针对 Mac 协议；Go 服务端的 UTF-8 扩展剪贴板、标准 VNC 布局修改和物理键码扩展供已实现对应协商的客户端使用。普通画面、已有键鼠、音频和光标无需改客户端。
+Multi-display H.264/HEVC uses DMA-BUF capture, OpenGL scaling/composition, and a GPU blit to a linear GBM buffer for VA encoding. It performs no CPU pixel mapping, readback, or upload. Capture and composition buffers are reused after downstream references are released. Unsupported GPU/EGL configurations fail explicitly; there is no silent CPU-composition fallback. Raw encoding retains its CPU path.
 
-验证覆盖现有客户端的认证、三种像素编码、持续解压、键鼠、双向文本、音频与光标；另有扩展 UTF-8、QEMU 输入、连接内缩放、并发客户端和异常清理测试。真实机器验证了 VA-API H.264/HEVC 硬解零 CPU 回读、双流合成、PipeWire 输出音频和 Hyprland 光标。多屏真实显示器热插拔、各 compositor 的 Portal 行为和长时间多客户端压力仍需部署环境验证，不能据此宣称与 WayVNC 所有平台行为完全等价。
+Names and single-display restrictions are sent through a client-requested Mirage layout extension. Older clients show display numbers. Every 500 ms, automatic mode checks output positions and logical/pixel sizes. After two matching observations of a new layout, it rebuilds capture and input mapping. Scaling, resolution changes, or hotplug events briefly disconnect clients so they can reconnect, without a manual server restart. Disabled outputs or outputs without valid logical dimensions are excluded. If all outputs disappear, the server waits for one to return. Display-type identification is not implemented. All discovered outputs become selectable by authenticated clients.
 
-运行测试：
+### Portal capture and input options
+
+Omitting `-output` uses the portal. `-input-output` must match the screen selected in the portal; omitting it disables keyboard/mouse input. For multiple screens, use `-multiple` and supply comma-separated output names in portal stream order, for example `-input-output DP-1,HDMI-A-1`. The portal backend must support multi-selection. Multi-screen input uses XDG logical geometry to account for different display scales. One virtual input device is shared across screens, so dragging does not re-press mouse buttons at screen boundaries.
+
+- `-input-seat` selects a seat.
+- `-keyboard-rules`, `-keyboard-model`, `-keyboard-layout`, `-keyboard-variant`, and `-keyboard-options` configure XKB.
+- `-input-transform` selects the captured image's Wayland transform (`0..7`).
+- `-no-clipboard` and `-no-audio` disable clipboard and desktop audio respectively.
+- `-max-clients` defaults to 4. Authentication, encoding, input, and audio state are maintained separately for each connection.
+- `-cursor-mode auto` selects a local cursor when an output name is provided and cursor capture is supported; otherwise the cursor is embedded. Explicit `local` and `embedded` modes are also available. Local mode requires standard Cursor encoding support, which Mirage provides.
+
+`-allow-resize` accepts standard SetDesktopSize requests to change encoded dimensions, select authorized screens, or rearrange the connection's layout without changing physical display modes. Adding `-resize-output-mode` submits physical output mode and position changes to the compositor, leaving other outputs unchanged. Success depends on the compositor. Tests cover both successful and rejected protocol transactions; physical mode changes require validation in the target deployment.
+
+The server cannot add protocol requests an older client does not send. The original Mirage VNC client uses classic Latin-1 clipboard messages, and its display-selection/server-scaling controls target the Mac protocol. Extended UTF-8 clipboard, standard VNC layout changes, and physical keycode extensions require a client that implements the relevant negotiation. Ordinary video, existing input, audio, and cursor support remain compatible.
+
+## Testing
+
+Tests cover client authentication, three pixel encodings, persistent decompression, keyboard/mouse input, bidirectional text, audio, and cursor behavior. Additional coverage includes extended UTF-8, QEMU input, per-connection scaling, concurrent clients, and cleanup on failure.
+
+Real hardware checks have verified VA-API H.264/HEVC decoding without CPU readback, dual-stream composition, PipeWire output audio, and Hyprland cursors. Real display hotplug, portal behavior across compositors, and long-running multi-client stress still require deployment-specific validation. These checks do not establish full feature parity with WayVNC across all platforms.
 
 ```sh
 go test -race -tags purego ./cmd/mirage-server ./internal/server/... ./internal/rfb
 go vet -tags purego ./cmd/mirage-server ./internal/server/...
-# 合成画面和 GPU 编解码（不捕获桌面内容）
+# Synthetic images and GPU encoding/decoding; no desktop capture.
 MIRAGE_TEST_RFB_GPU=1 go test -tags purego ./internal/server/... -run 'TestRFBHardwareInterop|TestCompositeCapture' -v
-# 真实 DMA-BUF 采集、禁止 CPU 映射、缓冲区释放与客户端硬解联调
+# Real DMA-BUF capture, prohibited CPU mapping, buffer release, and client hardware decoding.
 MIRAGE_TEST_NATIVE_OUTPUT=MIRAGE go test -race -tags purego ./internal/server/input ./internal/server/capture -run 'TestNativeDMA|TestNativeOutputCapture|TestDMAOwnership' -v
 MIRAGE_TEST_RFB_GPU=1 MIRAGE_TEST_NATIVE_OUTPUT=MIRAGE go test -tags purego ./internal/server -run TestRFBHardwareInterop -v
-# 真实输出音频、光标、剪贴板连接；不发送键鼠或改写桌面剪贴板
+# Real output audio, cursor, and clipboard connections; no input injection or clipboard writes.
 MIRAGE_TEST_NATIVE_OUTPUT=MIRAGE go test -tags purego ./internal/server -run TestNativeServicesWithExistingClient -v
 ```
 
-构建并安装 Go 服务端（默认安装到 `~/.local/bin`，不启动或重启服务）：
+## Build and install
+
+The build script installs to `~/.local/bin` by default. It does not start or restart the service.
 
 ```sh
 bash scripts/build-mirage-server.sh
-# 或指定绝对安装前缀
-bash scripts/build-mirage-server.sh /绝对安装前缀
+# Or specify an absolute installation prefix.
+bash scripts/build-mirage-server.sh /absolute/install/prefix
 ```
 
-本机 5902 的 Go 服务模板为 `scripts/mirage-server.service`，安装到 `~/.config/systemd/user/` 后使用 `systemctl --user enable --now mirage-server.service` 启动；先停止占用同一端口的旧服务。二进制安装在 `~/.local/bin/mirage-server`，部署前按本机调整输出名称、尺寸和证书路径。5900 的服务独立运行。
+The user-service template is [`scripts/mirage-server.service`](scripts/mirage-server.service), listening on port `5902`. Install it in `~/.config/systemd/user/`, adjust output settings, dimensions, and certificate paths, then enable it:
 
-`-pam-service system-auth` 使用 `/etc/pam.d/system-auth` 的系统 PAM 账户认证策略，代替 `-password-file`；其他发行版需选择对应的 PAM 策略。证书和私钥分别放在 `~/.config/mirage-server/tls_cert.pem`、`~/.config/mirage-server/tls_key.pem`，私钥权限设为 0600。迁移已有服务时复制原证书和私钥，可保持客户端已保存的证书指纹；客户端仍填写系统账户和密码。模板使用 `-output auto`，首次启动和重启均直接选择指定整屏，不弹框。使用 Portal 模式时，首次选择整屏；`-restore-token-file` 以 0600 权限保存共享恢复令牌，后端支持时重启无需重新选择。令牌属于本机私密状态，不应提交到仓库；后端拒绝恢复时仍需重新选择屏幕。
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now mirage-server.service
+```
 
-### Mac 原生屏幕共享的 SRP 认证
+Stop any old service occupying the same port first. The binary is installed at `~/.local/bin/mirage-server`. Any existing service on port `5900` is independent.
 
-`-ard -srp-file /path/to/srp.json` 启用 Apple Type 36 SRP-6a，严格禁止回退到旧式 Type 30。使用 RFC 5054 的 4096 位组、SHA-512、PBKDF2-HMAC-SHA512 和常量时间模运算。客户端校验服务器的 M2 证明，服务端校验客户端 M1；会话密钥继续保护已有 Apple record layer 和媒体密钥交换。这里的服务器认证基于 SRP 密码凭据，不是 CA 证书、RSA 主机指纹或 Kerberos；未实现 Type 33/35。
+`-pam-service system-auth` uses `/etc/pam.d/system-auth` for system account authentication instead of `-password-file`. Choose the appropriate PAM policy on other distributions. The template expects the certificate at `~/.config/mirage-server/tls_cert.pem` and its private key at `~/.config/mirage-server/tls_key.pem`; keep the key at mode `0600`. Copy the original certificate and key when migrating an existing service to preserve saved client fingerprints. Clients continue to supply their system account credentials.
 
-先在服务器本机终端登记（输入隐藏，不通过命令行参数或聊天传递密码）：
+The template uses `-output auto`, so startup and restart capture the selected default output without a picker. In portal mode, select the whole screen on first use. `-restore-token-file` stores the portal restore token at mode `0600`; supported backends can reuse it after restart. This token is private machine state and must not be committed. If the backend rejects it, select a screen again.
+
+## Apple SRP authentication
+
+`-ard -srp-file /path/to/srp.json` enables Apple security type 36 (SRP-6a) and strictly forbids fallback to legacy type 30. It uses the RFC 5054 4096-bit group, SHA-512, PBKDF2-HMAC-SHA512, and constant-time modular arithmetic. The client verifies the server's M2 proof, and the server verifies the client's M1 proof. Session keys continue to protect the Apple record layer and media key exchange. Server authentication here is based on SRP password credentials, not a CA certificate, RSA host fingerprint, or Kerberos. Types 33/35 are not implemented.
+
+Enroll from a trusted terminal on the server. Password input is hidden; do not pass it through command-line arguments or chat:
 
 ```sh
 mirage-server -enroll-srp -username "$(id -un)"
 ```
 
-默认保存到 `$XDG_CONFIG_HOME/mirage-server/srp.json`（未设置时为 `~/.config/mirage-server/srp.json`），文件权限 0600，原子替换，只保存盐、迭代次数和校验值。可用 `-srp-file` 指定位置。一个文件对应一个账户；这是独立的 Mirage 认证凭据，可以设置为与系统密码相同，但不自动随 PAM 密码变化，也不执行 PAM 账户有效期策略。修改或撤销时重新登记或删除文件，已有会话需重启服务才能立即撤销。
+By default, credentials are saved to `$XDG_CONFIG_HOME/mirage-server/srp.json`, or `~/.config/mirage-server/srp.json` when that variable is unset. The file is atomically replaced, uses mode `0600`, and stores only the salt, iteration count, and verifier. Override the path with `-srp-file`.
 
-服务启动参数加入 `-srp-file %h/.config/mirage-server/srp.json` 并移除 `-pam-service`。凭据每次连接读取，登记后无需重启；缺失、损坏或权限过宽时拒绝登录，不降级。凭据必须通过本机可信终端登记，不能从旧式远程登录自动学习。Apple Type 36 的真实 macOS 互操作需在目标版本上测试；自动测试覆盖 Mirage 客户端的双向证明、加密画面、错误密码、伪造服务器证明、无效公钥、异常长度与降级拒绝。
+Each file represents one account. These are separate Mirage credentials: the password may match the system password, but it does not automatically follow PAM password changes or enforce PAM account-expiration policies. Re-enroll or delete the file to change or revoke credentials. Restart the service to revoke existing sessions immediately.
 
-SRP 凭据格式 v2 固定使用经过 RFC 5054 摘要校验的 4096 位组。早期 v1 的组常量缺少一个十六进制字符，Mac 原生客户端会在挑战阶段拒绝；该版本凭据不能转换，升级后必须在本机重新运行一次 `mirage-server -enroll-srp`，可以使用相同密码。
+Add `-srp-file %h/.config/mirage-server/srp.json` to the service command and remove `-pam-service`. Credentials are read for each connection, so enrollment does not require a restart. Missing, malformed, or overly permissive credential files cause login rejection, not fallback. Credentials must be enrolled locally; they are never learned automatically from legacy remote logins.
+
+Native macOS type-36 interoperability must be tested against the target OS version. Automated tests cover Mirage's mutual proofs, encrypted pictures, incorrect passwords, forged server proofs, invalid public keys, malformed lengths, and downgrade rejection.
+
+Credential format v2 fixes the RFC 5054 group and verifies its digest. The earlier v1 constant was missing one hexadecimal character, causing native Mac clients to reject the challenge. Those credentials cannot be converted. After upgrading, run `mirage-server -enroll-srp` locally again; the same password may be reused.
+
+## License
+
+Mirage Server is released under the [MIT License](LICENSE). Third-party dependencies and bundled components retain their respective licenses and notices.

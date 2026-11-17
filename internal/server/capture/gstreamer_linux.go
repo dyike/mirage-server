@@ -407,11 +407,19 @@ func runPipelineBuffers(ctx context.Context, description string, consume func(ui
 
 // Audio captures the default output monitor, never the microphone.
 func Audio(ctx context.Context, format, channels byte, rate uint32, test bool, send func([]byte) error) error {
+	return AudioFrom(ctx, format, channels, rate, test, "", send)
+}
+
+// AudioFrom captures an explicitly selected sink when target is nonempty.
+func AudioFrom(ctx context.Context, format, channels byte, rate uint32, test bool, target string, send func([]byte) error) error {
 	formats := []string{"U8", "S8", "U16LE", "S16LE", "U32LE", "S32LE"}
 	if format > 5 || channels < 1 || channels > 2 || rate < 8000 || rate > 192000 {
 		return errors.New("invalid audio format")
 	}
 	source := `pipewiresrc client-name="Mirage desktop audio" stream-properties="props,stream.capture.sink=(boolean)true,media.type=(string)Audio,media.category=(string)Capture,media.role=(string)Music"`
+	if target != "" {
+		source += fmt.Sprintf(" target-object=%q", target)
+	}
 	if test {
 		source = "audiotestsrc is-live=true wave=sine samplesperbuffer=480"
 	}

@@ -45,13 +45,25 @@ func newARDAudio(ctx context.Context, socket *net.UDPConn, o ardOffer, ip net.IP
 	clear(o.audioReceiveKey[:])
 	clear(o.sendKey[:])
 	clear(o.receiveKey[:])
+	ready := make(chan struct{})
+	var readyOnce sync.Once
 	feedbackDone := make(chan struct{})
 	go func() {
 		defer close(feedbackDone)
 		buf := make([]byte, 2048)
 		for {
+			socket.SetReadDeadline(time.Now().Add(time.Second))
 			n, addr, err := socket.ReadFromUDP(buf)
 			if err != nil {
+				if timeout, ok := err.(net.Error); ok && timeout.Timeout() && ctx.Err() == nil {
+					a.mu.Lock()
+					expired := a.remote != nil && time.Since(a.seen) > 3*time.Second
+					a.mu.Unlock()
+					if !expired {
+						continue
+					}
+					cancel()
+				}
 				return
 			}
 			if !addr.IP.Equal(ip) {
@@ -69,6 +81,7 @@ func newARDAudio(ctx context.Context, socket *net.UDPConn, o ardOffer, ip net.IP
 			if a.remote == nil || a.remote.String() == addr.String() {
 				a.remote = addr
 				a.seen = time.Now()
+				readyOnce.Do(func() { close(ready) })
 			}
 			a.mu.Unlock()
 		}
@@ -76,6 +89,11 @@ func newARDAudio(ctx context.Context, socket *net.UDPConn, o ardOffer, ip net.IP
 	go func() {
 		defer close(a.done)
 		defer func() { cancel(); socket.Close(); <-feedbackDone }()
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return
+		}
 		ssrc := networkOrder.Uint32(seed[:]) | 1
 		seq := networkOrder.Uint16(seed[4:])
 		var timestamp, packets, octets uint32
@@ -93,7 +111,7 @@ func newARDAudio(ctx context.Context, socket *net.UDPConn, o ardOffer, ip net.IP
 			addr, seen := a.remote, a.seen
 			a.mu.Unlock()
 			if addr == nil || time.Since(seen) > 3*time.Second {
-				return nil
+				return errors.New("audio receiver feedback timed out")
 			}
 			now := time.Now()
 			socket.SetWriteDeadline(now.Add(50 * time.Millisecond))

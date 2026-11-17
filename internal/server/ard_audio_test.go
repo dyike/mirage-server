@@ -27,7 +27,9 @@ func TestARDAudioRequiresAuthenticatedPeerAndCloses(t *testing.T) {
 	copy(offer.audioReceiveKey[:], bytes.Repeat([]byte{2}, 46))
 	payload := bytes.Repeat([]byte{0x55}, 160)
 	stopped := make(chan struct{})
+	started := make(chan struct{})
 	a, err := newARDAudio(context.Background(), server, offer, net.IPv4(127, 0, 0, 1), func(ctx context.Context, send func([]byte) error) error {
+		close(started)
 		defer close(stopped)
 		timer := time.NewTicker(10 * time.Millisecond)
 		defer timer.Stop()
@@ -53,6 +55,11 @@ func TestARDAudioRequiresAuthenticatedPeerAndCloses(t *testing.T) {
 	viewer.SetReadDeadline(time.Now().Add(60 * time.Millisecond))
 	if _, _, err = viewer.ReadFromUDP(buf); err == nil {
 		t.Fatal("unauthenticated receiver received audio")
+	}
+	select {
+	case <-started:
+		t.Fatal("capture started before authenticated feedback")
+	default:
 	}
 	tx, _ := srtp.CreateContext(offer.audioReceiveKey[:32], offer.audioReceiveKey[32:], srtp.ProtectionProfileAes256CmHmacSha1_80)
 	rx, _ := srtp.CreateContext(offer.audioSendKey[:32], offer.audioSendKey[32:], srtp.ProtectionProfileAes256CmHmacSha1_80)

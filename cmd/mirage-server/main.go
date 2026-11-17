@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dyike/mirage-server/internal/audioroute"
 	"github.com/dyike/mirage-server/internal/server"
 	"github.com/dyike/mirage-server/internal/server/auth"
 	"github.com/dyike/mirage-server/internal/server/capture"
@@ -66,6 +67,8 @@ func run(parent context.Context) bool {
 	inputOutput := flags.String("input-output", "", "captured Wayland output name; empty disables remote input")
 	maxClients := flags.Int("max-clients", 4, "maximum authenticated clients")
 	noClipboard := flags.Bool("no-clipboard", false, "disable desktop clipboard sharing")
+	exclusiveAudio := flags.Bool("audio-exclusive", false, "route playback only to remote audio clients, restoring local output on disconnect")
+	restoreAudio := flags.Bool("restore-audio", false, "recover local audio routing after an exclusive-audio server exits")
 	noAudio := flags.Bool("no-audio", false, "disable desktop output audio")
 	inputSeat := flags.String("input-seat", "", "Wayland seat name; empty selects the first seat")
 	keyboardRules := flags.String("keyboard-rules", "", "XKB rules")
@@ -75,6 +78,22 @@ func run(parent context.Context) bool {
 	keyboardVariant := flags.String("keyboard-variant", "", "XKB keyboard variant(s)")
 	inputTransform := flags.Uint("input-transform", 0, "captured image rotation/flip (Wayland 0..7)")
 	flags.Parse(os.Args[1:])
+	var audioRoute *audioroute.Manager
+	if *exclusiveAudio || *restoreAudio {
+		var err error
+		audioRoute, err = audioroute.Open()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer func() {
+			if err := audioRoute.Close(); err != nil {
+				log.Printf("restore local audio: %v", err)
+			}
+		}()
+		if *restoreAudio {
+			return false
+		}
+	}
 	if *enroll {
 		if *srpPath == "" {
 			*srpPath = defaultSRPPath()
@@ -371,9 +390,19 @@ func run(parent context.Context) bool {
 			if err := capture.AudioELDAvailable(); err != nil {
 				log.Printf("ARD audio unavailable: %v", err)
 			} else {
-				srv.ARDAudio = func(ctx context.Context, send func([]byte) error) error { return capture.AudioELD(ctx, *test, send) }
+				srv.ARDAudio = func(ctx context.Context, send func([]byte) error) error {
+					if audioRoute != nil && !*test {
+						return audioRoute.Capture(ctx, func(ctx context.Context, target string) error { return capture.AudioELDFrom(ctx, false, target, send) })
+					}
+					return capture.AudioELD(ctx, *test, send)
+				}
 			}
 			srv.Audio = func(ctx context.Context, f server.AudioFormat, send func([]byte) error) error {
+				if audioRoute != nil && !*test {
+					return audioRoute.Capture(ctx, func(ctx context.Context, target string) error {
+						return capture.AudioFrom(ctx, f.Format, f.Channels, f.Rate, false, target, send)
+					})
+				}
 				return capture.Audio(ctx, f.Format, f.Channels, f.Rate, *test, send)
 			}
 		}

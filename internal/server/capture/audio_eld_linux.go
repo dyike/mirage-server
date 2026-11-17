@@ -16,13 +16,16 @@ func AudioELDAvailable() error {
 
 // AudioELD captures the default output monitor, never a microphone.
 func AudioELD(ctx context.Context, test bool, send func([]byte) error) error {
+	return AudioELDFrom(ctx, test, "", send)
+}
+func AudioELDFrom(ctx context.Context, test bool, target string, send func([]byte) error) error {
 	e, err := audio.NewELDEncoder()
 	if err != nil {
 		return err
 	}
 	defer e.Close()
 	pending := make([]byte, 0, 1920)
-	return Audio(ctx, 3, 2, 48000, test, func(data []byte) error {
+	return AudioFrom(ctx, 3, 2, 48000, test, target, func(data []byte) error {
 		for len(data) > 0 {
 			n := min(1920-len(pending), len(data))
 			pending = append(pending, data[:n]...)
